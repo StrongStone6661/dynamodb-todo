@@ -1,14 +1,19 @@
-# Build stage
-FROM maven:3.8.5-openjdk-17 AS build
+FROM maven:3.9.6-eclipse-temurin-17 AS builder
+
 WORKDIR /app
+
 COPY pom.xml .
 COPY src ./src
+
 RUN mvn clean package -DskipTests
 
-# Runtime stage
-FROM openjdk:17-jdk-slim
+FROM eclipse-temurin:17-jre-focal AS runtime
+
 WORKDIR /app
-COPY --from=build /app/target/dynamodb-todo-0.0.1-SNAPSHOT.jar dynamodb-todo.jar
-COPY src/main/resources/static ./static
+
+COPY --from=builder /app/target/*.jar app.jar
+COPY src/main/resources/static/ ./static/
+
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "dynamodb-todo.jar"]
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
