@@ -1,0 +1,125 @@
+name: Build and Deploy Todo App to ECS
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build JAR file with Maven
+        run: mvn clean package -DskipTests
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and tag Docker image
+        run: |
+          docker build -t todo-app .
+          docker tag todo-app:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/todo-app:latest
+
+      - name: Push image to Amazon ECR
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/todo-app:latest
+
+  deploy:
+    name: Deploy with Blue-Green strategy
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: eu-central-1  # Matches ECS setup region
+    
+    - name: Register new task definition
+      id: task-def
+      run: |
+        # Get current task definition
+        aws ecs describe-task-definition --task-definition todo-app-task --query taskDefinition > task-definition.json
+        
+        # Update container image in task definition to use latest tag
+        jq '.containerDefinitions[0].image = "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/todo-app:latest"' task-definition.json > new-task-definition.json
+        
+        # Register new task definition version
+        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+          --family todo-app-task \
+          --requires-compatibilities FARGATE \
+          --network-mode awsvpc \
+          --cpu "512" \
+          --memory "1024" \
+          --execution-role-arn $(jq -r '.executionRoleArn' task-definition.json) \
+          --task-role-arn $(jq -r '.taskRoleArn' task-definition.json) \
+          --container-definitions "$(jq '.containerDefinitions' new-task-definition.json)" \
+          --query 'taskDefinition.taskDefinitionArn' \
+          --output text)
+        
+        echo "task_definition_arn=$NEW_TASK_DEF_ARN" >> $GITHUB_OUTPUT
+    
+    - name: Create AppSpec file
+      run: |
+        cat > appspec.yaml << 'EOF'
+        version: 0.0
+        Resources:
+          - TargetService:
+              Type: AWS::ECS::Service
+              Properties:
+                TaskDefinition: "${TASK_DEF_ARN}"
+                LoadBalancerInfo:
+                  ContainerName: "todo-app"
+                  ContainerPort: 8080
+                PlatformVersion: "LATEST"
+        EOF
+        
+        # Replace placeholder with actual task definition ARN
+        sed -i "s|\${TASK_DEF_ARN}|${{ steps.task-def.outputs.task_definition_arn }}|g" appspec.yaml
+        
+        # Print AppSpec for debugging
+        cat appspec.yaml
+    
+    - name: Start CodeDeploy Deployment
+      run: |
+        DEPLOYMENT_ID=$(aws deploy create-deployment \
+          --application-name TodoAppCodeDeploy \
+          --deployment-group-name TodoAppDeploymentGroup \
+          --revision revisionType=AppSpecContent,appSpecContent="{content='$(cat appspec.yaml)'}" \
+          --description "Automated blue-green deployment via GitHub Actions" \
+          --query 'deploymentId' \
+          --output text)
+        
+        echo "Started deployment: $DEPLOYMENT_ID"
+        
+        # Monitor deployment - don't wait for completion to avoid GitHub Action timeouts
+        aws deploy get-deployment --deployment-id $DEPLOYMENT_ID
+        
+        echo "Deployment ID: $DEPLOYMENT_ID"
+        echo "Monitor the deployment progress in AWS CodeDeploy console"
