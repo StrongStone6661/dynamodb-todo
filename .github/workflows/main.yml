@@ -3,7 +3,7 @@ name: Build and Deploy Todo App to ECS
 on:
   push:
     branches:
-      - main  # Changed from 'master' to match common convention, adjust if needed
+      - master
 
 jobs:
   build-and-push:
