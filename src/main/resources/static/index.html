@@ -150,6 +150,53 @@
             background: #c0392b;
         }
 
+        .todo-item span input {
+            font-size: 16px;
+            color: #2c3e50;
+            width: 100%;
+            padding: 5px;
+            outline: none;
+        }
+
+        .todo-item span input:focus {
+            border-bottom: 2px solid #3498db;
+        }
+
+        .todo-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .edit-btn {
+            padding: 8px 15px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .edit-btn:hover {
+            background: #2980b9;
+        }
+
+        .delete-btn {
+            padding: 8px 15px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .delete-btn:hover {
+            background: #c0392b;
+        }
+
         /* Custom scrollbar */
         .todo-list::-webkit-scrollbar {
             width: 8px;
@@ -206,25 +253,28 @@
 </div>
 
 <script>
-    async function loadTodos() {
-        try {
-            const response = await fetch('/api/todos');
-            const todos = await response.json();
-            const todosDiv = document.getElementById('todos');
-            todosDiv.innerHTML = '';
-            todos.forEach(todo => {
-                const div = document.createElement('div');
-                div.className = `todo-item ${todo.completed ? 'completed' : ''}`;
-                div.innerHTML = `
-                    <input type="checkbox" ${todo.completed ? 'checked' : ''}
-                        onchange="updateTodo('${todo.id}', this.checked)">
-                    <span>${todo.title}</span>
-                    <button onclick="deleteTodo('${todo.id}')">Delete</button>`;
-                todosDiv.appendChild(div);
-            });
-        } catch (error) {
-            console.error('Error loading todos:', error);
-        }
+    function loadTodos() {
+        fetch('/api/todos')
+            .then(response => response.json())
+            .then(todos => {
+                const todosDiv = document.getElementById('todos');
+                todosDiv.innerHTML = '';
+                todos.forEach(todo => {
+                    const div = document.createElement('div');
+                    div.className = `todo-item ${todo.completed ? 'completed' : ''}`;
+                    div.innerHTML = `
+                        <input type="checkbox" ${todo.completed ? 'checked' : ''}
+                            onchange="updateTodoStatus('${todo.id}', this.checked)">
+                        <span data-todo-id="${todo.id}">${todo.title}</span>
+                        <div class="todo-actions">
+                            <button onclick="makeEditable('${todo.id}')" class="edit-btn">Edit</button>
+                            <button onclick="deleteTodo('${todo.id}')" class="delete-btn">Delete</button>
+                        </div>
+                    `;
+                    todosDiv.appendChild(div);
+                });
+            })
+            .catch(error => console.error('Error loading todos:', error));
     }
 
     async function addTodo(e) {
@@ -244,16 +294,59 @@
         }
     }
 
-    async function updateTodo(id, completed) {
+    async function makeEditable(id) {
+        const span = document.querySelector(`span[data-todo-id="${id}"]`);
+        const currentTitle = span.textContent;
+        span.innerHTML = `
+            <input type="text" 
+                   value="${currentTitle}" 
+                   onblur="updateTodoTitle('${id}', this.value)"
+                   onkeypress="if(event.key === 'Enter') this.blur();"
+                   style="border: none; background: transparent; width: 100%;">
+        `;
+        span.querySelector('input').focus();
+    }
+
+    async function updateTodoTitle(id, newTitle) {
+        if (!newTitle.trim()) return;
+        try {
+            // First get the current todo item to preserve its completed status
+            const todoItem = document.querySelector(`span[data-todo-id="${id}"]`).closest('.todo-item');
+            const isCompleted = todoItem.querySelector('input[type="checkbox"]').checked;
+
+            // Send PUT request with both title and completed status
+            const response = await fetch(`/api/todos/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    title: newTitle,
+                    completed: isCompleted
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to update todo');
+            }
+
+            loadTodos(); // Refresh the list
+        } catch (error) {
+            console.error('Error updating todo title:', error);
+        }
+    }
+
+    async function updateTodoStatus(id, completed) {
         try {
             await fetch(`/api/todos/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: 'Updated', completed: completed.toString() })
+                body: JSON.stringify({ 
+                    completed: completed,
+                    title: document.querySelector(`[data-todo-id="${id}"]`).textContent.trim()
+                })
             });
             loadTodos();
         } catch (error) {
-            console.error('Error updating todo:', error);
+            console.error('Error updating todo status:', error);
         }
     }
 

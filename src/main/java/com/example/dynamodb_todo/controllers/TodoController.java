@@ -64,31 +64,49 @@ public class TodoController {
     }
 
     @PutMapping("/{id}")
-    public Map<String, String> updateTodo(@PathVariable String id, @RequestBody Map<String, String> todo) {
-        Map<String, AttributeValue> key = new HashMap<>();
-        key.put("id", AttributeValue.builder().s(id).build());
+    public Map<String, String> updateTodo(@PathVariable String id, @RequestBody Map<String, Object> todo) {
+        try {
+            // Validate input
+            if (todo.get("title") == null || todo.get("completed") == null) {
+                throw new IllegalArgumentException("Title and completed status are required");
+            }
 
-        Map<String, AttributeValueUpdate> updates = new HashMap<>();
-        updates.put("title", AttributeValueUpdate.builder()
-                .value(AttributeValue.builder().s(todo.get("title")).build())
-                .action(AttributeAction.PUT)
-                .build());
-        updates.put("completed", AttributeValueUpdate.builder()
-                .value(AttributeValue.builder().bool(Boolean.parseBoolean(todo.get("completed"))).build())
-                .action(AttributeAction.PUT)
-                .build());
+            String title = (String) todo.get("title");
+            Boolean completed = (Boolean) todo.get("completed");
 
-        dynamoDbClient.updateItem(UpdateItemRequest.builder()
-                .tableName(tableName)
-                .key(key)
-                .attributeUpdates(updates)
-                .build());
+            // Create key for the item
+            Map<String, AttributeValue> key = new HashMap<>();
+            key.put("id", AttributeValue.builder().s(id).build());
 
-        Map<String, String> response = new HashMap<>();
-        response.put("id", id);
-        response.put("title", todo.get("title"));
-        response.put("completed", todo.get("completed"));
-        return response;
+            // Create update expression and attribute values
+            Map<String, String> expressionAttributeNames = new HashMap<>();
+            expressionAttributeNames.put("#T", "title");
+            expressionAttributeNames.put("#C", "completed");
+
+            Map<String, AttributeValue> expressionAttributeValues = new HashMap<>();
+            expressionAttributeValues.put(":title", AttributeValue.builder().s(title).build());
+            expressionAttributeValues.put(":completed", AttributeValue.builder().bool(completed).build());
+
+            // Update the item
+            UpdateItemResponse updateResult = dynamoDbClient.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key)
+                    .updateExpression("SET #T = :title, #C = :completed")
+                    .expressionAttributeNames(expressionAttributeNames)
+                    .expressionAttributeValues(expressionAttributeValues)
+                    .returnValues(ReturnValue.ALL_NEW)
+                    .build());
+
+            // Create response
+            Map<String, String> response = new HashMap<>();
+            response.put("id", id);
+            response.put("title", title);
+            response.put("completed", completed.toString());
+            return response;
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to update todo: " + e.getMessage());
+        }
     }
 
     @DeleteMapping("/{id}")
